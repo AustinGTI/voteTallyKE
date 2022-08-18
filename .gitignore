@@ -1,0 +1,6 @@
+
+*.PDF
+/mnist/
+/iebc_forms/
+/mnistData/
+/ALL_FORMS/
