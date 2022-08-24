@@ -3,6 +3,9 @@ import os
 import cv2,math
 import numpy as np
 
+import neuralNet
+
+
 def rotateImage(image, angle):
   image_center = tuple(np.array(image.shape[1::-1]) / 2)
   rot_mat = cv2.getRotationMatrix2D(image_center, angle, 1.0)
@@ -111,16 +114,8 @@ def toHeavierStrokes(img):
 
 def deriveDigits(imgname):
     imgpath = f'iebc_forms/imgcropsfin/{imgname}.jpg'
-    img = 255 - cv2.imread(imgpath, 0)
-    # bimg = cv2.GaussianBlur(img, (15, 15), 0)
-    ret, oimg = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    #dimg = cv2.dilate(oimg, np.ones((5, 5), np.uint8), 1)
-    simg,img = straightenImage(oimg,img)
-    cimg,img = cropDigitColumn(simg,img)
-    #spimgs = splitDigitLines(cimg)
-    crimg,img = cropEmptyRows(cimg,img)
-    #fimg = toHeavierStrokes(crimg)
-    cv2.imwrite(f'iebc_forms/imgcleans/{imgname}.jpg',crimg)
+    neuralNet.run()
+    #cv2.imwrite(f'iebc_forms/imgcleans/{imgname}.jpg',crimg)
     #print("done")
 
 def splitDigitLines(img):

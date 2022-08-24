@@ -7,8 +7,6 @@ import numpy as np
 import jellyfish
 import matplotlib.pyplot as plt
 
-import digitRecognition
-
 ocr = PaddleOCR(use_angle_cls=True, lang='en')
 from PIL import Image
 
@@ -23,7 +21,9 @@ DEAD_FORMS = 0
 #convert a pdf file to an image file
 def pdfToImage(pdf, root ="iebc_forms", county ="pdfs"):
     images = pdf2image.convert_from_path(f'{root}/{county}/{pdf}.pdf',poppler_path=POPPLER_PATH)
-    images[0].save(f'iebc_forms/imgs/{pdf}.jpg','JPEG')
+    cvIm = np.array(images[0])
+    # Convert RGB to BGR
+    return cvIm[:, :, ::-1].copy()
 
 #compare 2 strings equality relative to a minimum levenshtein_distance
 def compareStrings(text, term):
@@ -46,11 +46,8 @@ def boundsToCrop(blBound,width,translation):
     ]#x,y,w,h
 
 #crop out the general location of the tallies on the form
-def cropTallyGamma(img):
+def cropTallyGamma(im, imId):
     #crop out the bottom 2/3 of the form to save ocr execution time
-    im = cv2.imread(f'iebc_forms/imgs/{img}.jpg', 0)
-    cv2.imwrite(f'iebc_forms/imgcrops/{img}.jpg',im[:im.shape[0]//3])
-    img_path = f'iebc_forms/imgcrops/{img}.jpg'
 
     #location of tallies relative to regular phrases on the form
     anchorPhrases = {
@@ -66,7 +63,7 @@ def cropTallyGamma(img):
     }
 
     #using paddleocr to read words and phrases on the form
-    result = ocr.ocr(img_path, cls=True)
+    result = ocr.ocr(im[:im.shape[0] // 3], cls=True)
 
     cropEstimates = []
     for bounds,text in result:
@@ -85,14 +82,17 @@ def cropTallyGamma(img):
     #weight each anchor phrase based on its length and accuracy and find the average tallies location
     weightedSum = [0,0,0,0]
     weights = 0
+    if len(cropEstimates) == 0:
+        return False
     for est in cropEstimates:
         for di,dim in enumerate(est[0]):
             weightedSum[di] += dim*est[1]*est[2]
         weights += est[1]*est[2]
+
     cx, cy, cw, ch = [int(round(v/weights)) for v in weightedSum]
 
     #crop out the voter tallies and save the image
-    cv2.imwrite(f'iebc_forms/imgcropsfin/{img}.jpg', im[cy:cy+ch,cx:cx+cw])
+    cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg', im[cy:cy+ch,cx:cx+cw])
     return True
 # endregion
 
@@ -284,21 +284,19 @@ def cropForm(im):
 
 # region VOTE TALLY COUNT FUNCTIONS
 #get number of votes for each candidate
-def getVoterTallies(path):
+def getVoterTalliesCrop(path):
     root,county,pdf = path.split("/")
     filename = pdf.split(".")[0]
-    if not os.path.exists(f'iebc_forms/imgs/{pdf}.jpg'):
-        # convert the scanned form pdf file into a jpg image and save it
-        pdfToImage(filename, root, county)
+    im = pdfToImage(filename, root, county)
 
     # crop out the general location of the vote tallies on the form
-    charsFound = cropTallyGamma(filename)
+    cropTallyGamma(im,filename.split("_")[3])
     #cropTallyAlpha(filename)
     #cleanCrop(filename)
-    if charsFound:
+    '''if charsFound:
         votes = digitRecognition.deriveDigits(filename)  # extract the vote tallies
         return votes
-    return []
+    return []'''
 
 def addToVotes(votes,newVotes):
     order = ["raila","ruto","waihiga","wajackoyah"]
@@ -306,20 +304,16 @@ def addToVotes(votes,newVotes):
         votes[order[vi]] += v
 
 def iterateForms():
-    votes = {"raila":0,"ruto":0,"waihiga":0,"wajackoyah":0}
     for county in os.listdir("ALL_FORMS"):
         print(f"Processing {county}")
         forms = os.listdir(f"ALL_FORMS/{county}")
         totalForms = len(forms)
         for fi,form in enumerate(random.sample(forms,25)):
-            nVotes = getVoterTallies(f"ALL_FORMS/{county}/{form}")
-            #addToVotes(votes,nVotes)
+            getVoterTalliesCrop(f"ALL_FORMS/{county}/{form}")
             print(f"processed form {fi+1} out of {totalForms}")
-            if fi%10 == 0:
-                print(f"Raila : {votes['raila']} votes, Ruto : {votes['ruto']} votes")
-                print(DEAD_FORMS)
 
-        pickle.dump(votes,open("finTally.p","wb"))
+
+        #pickle.dump(votes,open("finTally.p","wb"))
 
         break
     print("done")
