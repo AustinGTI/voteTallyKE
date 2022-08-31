@@ -1,3 +1,5 @@
+import csv
+import itertools
 import math,cv2,os
 import pickle
 import random
@@ -6,6 +8,8 @@ from paddleocr import PaddleOCR
 import numpy as np
 import jellyfish
 import matplotlib.pyplot as plt
+
+import neuralNet
 
 ocr = PaddleOCR(use_angle_cls=True, lang='en')
 from PIL import Image
@@ -32,6 +36,12 @@ def compareStrings(text, term):
     if jellyfish.levenshtein_distance(term,text) <= math.ceil(len(term)/8):
         return True
     return False
+
+def padVal(val,pad,padstr = "0"):
+    vstr = str(val)
+    if len(vstr) >= pad:
+        return vstr
+    return padstr*(pad - len(vstr))+vstr
 # endregion
 
 
@@ -90,9 +100,14 @@ def cropTallyGamma(im, imId):
         weights += est[1]*est[2]
 
     cx, cy, cw, ch = [int(round(v/weights)) for v in weightedSum]
-
+    cropIm = im[cy:cy+ch,cx:cx+cw]
+    allVals = sorted(np.reshape(cropIm,[-1]))
+    lVal,hVal = allVals[int(len(allVals)*0.02)],allVals[int(len(allVals)*0.98)]
+    lCap,hCap = 10,230
+    offset,stretch = lCap - lVal,(hCap-lCap)/(hVal-lVal)
+    finIm = np.clip((cropIm+offset)*stretch,lCap,hCap).astype(np.uint8)
     #crop out the voter tallies and save the image
-    cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg', im[cy:cy+ch,cx:cx+cw])
+    cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg',finIm )
     return True
 # endregion
 
@@ -298,24 +313,155 @@ def getVoterTalliesCrop(path):
         return votes
     return []'''
 
+def weighLine(digits):
+    digits = sorted(digits,key=lambda x:x[1][0])
+    alignedWgt = np.var([(pos[3]-pos[1])/2 for k,pos,conf in digits])
+    confWgt = 1/sum([conf**1.5 for k,pos,conf in digits])
+    overlapWgt = np.mean([abs(digits[di][1][2]-digits[di+1][1][0]-25) for di,dg in enumerate(digits[:-1])])
+    return [alignedWgt,confWgt,overlapWgt]
+
+def compareWeights(wa,wb,priorities = [0.6,0.3,0.1]):
+    diff = 0
+    wi = 0
+    for a,b in zip(wa,wb):
+        diff += ((b-a)/a)*priorities[wi]
+        wi+=1
+    return diff
+
+def getEachLineBeta(values):
+    lines = []
+    values = sorted(values,key=lambda x:(x[1][1]+x[1][3])/2)
+    getMidY = lambda x:(x[1][1]+x[1][3])/2
+    gaps = [getMidY(values[vi+1])-getMidY(values[vi])
+            for vi in range(len(values)-1)]
+    avgHeight = np.mean([val[1][3]-val[1][1] for val in values])
+    prevJump = 0
+    for gi,gap in enumerate(gaps):
+        if gap > avgHeight*0.333:
+            line = values[prevJump:gi+1]
+            if len(line) >= 3:
+                lines.append(line)
+            prevJump = gi+1
+        if gi == len(gaps)-1 and gi+2 - prevJump >= 3:
+            lines.append(values[prevJump:gi+2])
+
+    lines = [sorted(sorted(line,key=lambda x:x[2],reverse=True)[:3],key=lambda x:x[1][0]) for line in lines][-4:]
+    tallies = [int(''.join([dg[0] for dg in line])) for line in lines]
+    return lines,tallies
+
+
+
+
+
+
+
+def getEachLine(values):
+    lines = []
+    allCombos = [[combo,weighLine(combo)] for combo in itertools.combinations(values,3)]
+    while len(values) >= 3:
+        bestLine = None
+        for combo,weights in allCombos:
+            if not all([dg in values for dg in combo]):
+                continue
+            if bestLine == None or compareWeights(bestLine[1],weights) < 0:
+                bestLine = [combo,weights]
+        lines.append(sorted(bestLine[0],key=lambda x:x[1][0]))
+        for v in bestLine[0]:
+            values.remove(v)
+    lines = sorted(lines,key = lambda x:np.mean([d[1][1] for d in x]))
+    tallies = [int(''.join([dg[0] for dg in line])) for line in lines]
+    return [lines,tallies]
+
+CANDIDATES = ["RAILA","RUTO","WAJACKOYAH","WAIHIGA"]
+LEVELS = ['COUNTY','CONSTITUENCY','WARD','POLLING CENTER','STREAM','POLLING STATION']
+
+def getLocationCodes():
+    csvfile = csv.reader(open("configData/locationCodes.csv","r"))
+    rows = [x for x in csvfile]
+    keys,values = rows[0],rows[1:]
+    kdata = dict()
+    for v in values:
+        pid = padVal(v[keys.index("pollingStationId")].strip(),15)
+        kdata[pid] = {
+            "COUNTY":v[keys.index("countyName")],
+            "CONSTITUENCY":v[keys.index("constituency name")],
+            "WARD":v[keys.index("wardname")],
+            "POLLING CENTER":v[keys.index("pollingCenterName")],
+            "STREAM":v[keys.index("stream")],
+            "POLLING STATION": pid,
+            "VOTERS":v[keys.index("voters")]
+        }
+    return kdata
+
+def saveTallies(data,level,locData):
+    global CANDIDATES
+    global LEVELS
+    file = open(f'iebc_forms/tallyData/{level.title().replace(" ","")}Tallies.csv','w',newline='')
+    csvfile = csv.writer(file)
+    entries = list(set([v[level] for v in locData.values()]))
+
+    voteTallies = {k:{cd: 0 for cd in CANDIDATES} for k in entries}
+
+    for k,v in data.items():
+        for ti,tally in enumerate(v[1]):
+            voteTallies[locData[k][level]][CANDIDATES[ti]]+=tally
+    csvfile.writerow(LEVELS[:LEVELS.index(level)+1]+CANDIDATES)
+    completedEntries = []
+    for pdata in locData.values():
+        entry = pdata[level]
+        if entry in completedEntries:
+            continue
+        completedEntries.append(entry)
+        csvfile.writerow([pdata[d] for d in LEVELS[:LEVELS.index(level)+1]]+
+                         [voteTallies[entry][cd] for cd in CANDIDATES])
+    file.close()
+
+
+def compileTallyData(data):
+    levels = ['POLLING STATION','WARD','CONSTITUENCY','COUNTY']
+    locationData = getLocationCodes()
+    for level in levels:
+        saveTallies(data,level,locationData)
+
+
+
+def processRawData(rawData):
+    finData = dict()
+    for k,v in rawData.items():
+        if len(v) < 12:
+            continue
+        finData[k] = getEachLineBeta(v)
+    return finData
+
 def addToVotes(votes,newVotes):
     order = ["raila","ruto","waihiga","wajackoyah"]
     for vi,v in enumerate(newVotes[:len(order)]):
         votes[order[vi]] += v
 
 def iterateForms():
+    global CANDIDATES
     for county in os.listdir("ALL_FORMS"):
         print(f"Processing {county}")
         forms = os.listdir(f"ALL_FORMS/{county}")
         totalForms = len(forms)
-        for fi,form in enumerate(random.sample(forms,25)):
+        for fi,form in enumerate(forms):
             getVoterTalliesCrop(f"ALL_FORMS/{county}/{form}")
             print(f"processed form {fi+1} out of {totalForms}")
+        break #'''
+    rawData = neuralNet.runAlpha()
+    votes = processRawData(rawData)
+
+    #count votes
+    voteTallies = {cd:0 for cd in CANDIDATES}
+    for k,v in votes.items():
+        for ti,tally in enumerate(v[1][-4:]):
+            voteTallies[CANDIDATES[ti]]+=tally
+
+    #save csv files
+    compileTallyData(votes)
 
 
-        #pickle.dump(votes,open("finTally.p","wb"))
-
-        break
+    pickle.dump(voteTallies,open("iebc_forms/tallyData/finTally.p","wb"))
     print("done")
 # endregion
 

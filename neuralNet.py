@@ -253,7 +253,7 @@ def runAlpha(  # model.pt path(s)
 
         #p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
         im0 = im0s.copy()
-
+        annotator = Annotator(im0, line_width=2, example=str(names),font_size=15)
 
         if len(det):
             # Rescale boxes from img_size to im0 size
@@ -264,8 +264,14 @@ def runAlpha(  # model.pt path(s)
             # Write results
             for *xyxy, conf, cls in reversed(det):
                 imResults.append([names[int(cls)],[int(x) for x in xyxy],float(conf)])
-        results[path] = imResults
-        print(f"{path} done")
+                # bounding the digits
+                c = int(cls)  # integer class
+                label = f'{names[c]} {conf:.2f}'
+                annotator.box_label(xyxy, label, color=colors(c, True))
+        pIdx = path.split("\\")[-1].split(".")[0]
+        cv2.imwrite(f'iebc_forms/imgcropsfin/{pIdx}.jpg',im0)
+        results[pIdx] = imResults
+        print(f"{pIdx} done")
     return results
 
 
