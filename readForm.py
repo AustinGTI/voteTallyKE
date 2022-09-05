@@ -1,25 +1,23 @@
-import csv
-import itertools
-import math,cv2,os
-import pickle
-import random
+import csv,itertools,math,cv2,os,pickle
+import time
 
 from paddleocr import PaddleOCR
 import numpy as np
 import jellyfish
 import matplotlib.pyplot as plt
 
-import neuralNet
+from neuralNet import YOLOModel
 
-ocr = PaddleOCR(use_angle_cls=True, lang='en')
 from PIL import Image
 
 import pdf2image
+
+import utilityFunctions
+
 POPPLER_PATH = "C:/Users/Admin/Documents/poppler-22.04.0/Library/bin"
 
-CANDIDATES = "raila odinga ruto william samoei "
+#CANDIDATES = "raila odinga ruto william samoei "
 
-DEAD_FORMS = 0
 
 # region UTILITY FUNCTIONS
 #convert a pdf file to an image file
@@ -37,11 +35,12 @@ def compareStrings(text, term):
         return True
     return False
 
-def padVal(val,pad,padstr = "0"):
-    vstr = str(val)
-    if len(vstr) >= pad:
-        return vstr
-    return padstr*(pad - len(vstr))+vstr
+def setImageContrast(im,lCap,hCap,maxTail = 0.02):
+    allVals = sorted(np.reshape(cv2.resize(im,(0,0),fx=0.1,fy=0.1,interpolation=cv2.INTER_NEAREST), [-1]))
+    lVal, hVal = allVals[int(len(allVals) * maxTail)], allVals[int(len(allVals) * (1-maxTail))]
+    offset, stretch = lCap - lVal, (hCap - lCap) / (hVal - lVal)
+    ctIm = np.clip((im + offset) * stretch, lCap, hCap).astype(np.uint8)
+    return ctIm
 # endregion
 
 
@@ -55,39 +54,70 @@ def boundsToCrop(blBound,width,translation):
         width*translation[3]
     ]#x,y,w,h
 
+
+
+
 #crop out the general location of the tallies on the form
-def cropTallyGamma(im, imId):
+def cropTallyGamma(im,imId,saveIm = True):
     #crop out the bottom 2/3 of the form to save ocr execution time
 
     #location of tallies relative to regular phrases on the form
     anchorPhrases = {
         "presidential election results at the polling station":[
-            1.068,0.237,0.2,0.4
+            0.87,0.237,0.4,0.4
         ],
+
         "number of votes cast in favour of each candidate":[
-            2.429,-0.128,0.375,0.75
+            2.05,-0.128,0.75,0.75
         ],
         "no of valid votes obtained":[
-            2.193,-0.33,0.785,1.59
+            1.4,-0.33,1.59,1.59
         ]
     }
-
+    #mIm = cv2.resize(im,(0,0),fx=downsize,fy=downsize)
     #using paddleocr to read words and phrases on the form
-    result = ocr.ocr(im[:im.shape[0] // 3], cls=True)
+    fresult = OCR.ocr(im[:im.shape[0]//2], cls=False)
+
+
+
+    #rotate image to perfectly horizontal text
+    rots,confs = [],[]
+    fresult = sorted(fresult,key=lambda x:len(x[1][0])*x[1][1]**2,reverse=True)
+
 
     cropEstimates = []
-    for bounds,text in result:
+    for bounds,text in fresult:
         for k,v in anchorPhrases.items():
             #for every string found on the form, check if string is in the anchor phrases
             if compareStrings(text[0], k):
                 #if anchorPhrase has been found, store its bottom left corner and its width
-                bl = bounds[3]
-                w = bounds[1][0] - bounds[0][0]
+                #bl = bounds[3]
+                #w = bounds[1][0] - bounds[0][0]
 
                 #use the estimated relative location of the anchor phrases to estimate the location of the tallies
-                estimate = [boundsToCrop(bl,w,v),text[1],len(k)]
-                cropEstimates.append(estimate)
+                #cropEstimates.append([bounds,len(k)])
+                cropEstimates.append([bounds,k,v,text])
                 break
+        rot = math.degrees(math.atan((bounds[1][1]-bounds[0][1])/(bounds[1][0]-bounds[0][0])))
+        rots.append(rot)
+        confs.append(len(text[0])*text[1])
+
+    if len(cropEstimates) == 0:
+        print("No estimate text found in image")
+        return False
+
+    imRotation = sum([rot*conf for rot,conf in zip(rots,confs)])/sum(confs)
+    cropEstimates = [[[utilityFunctions.rotatePoint(tuple(np.array(im.shape[1::-1]) / 2),pt,-imRotation)
+                       for pt in bds],k,v,text]for bds,k,v,text in cropEstimates]
+    for ci in range(len(cropEstimates)):
+        bounds,k,v,text = cropEstimates[ci]
+        bl = bounds[3]
+        w = bounds[1][0] - bounds[0][0]
+        estimate = [boundsToCrop(bl, w, v), text[1], len(k)]
+        cropEstimates[ci] = estimate
+    #estimate = [boundsToCrop(bl, w, v), text[1], len(k)]
+
+    rIm = utilityFunctions.rotateImage(im,imRotation,bg = 200)
 
     #weight each anchor phrase based on its length and accuracy and find the average tallies location
     weightedSum = [0,0,0,0]
@@ -99,26 +129,117 @@ def cropTallyGamma(im, imId):
             weightedSum[di] += dim*est[1]*est[2]
         weights += est[1]*est[2]
 
+    #crop out the voter tallies
     cx, cy, cw, ch = [int(round(v/weights)) for v in weightedSum]
-    cropIm = im[cy:cy+ch,cx:cx+cw]
-    allVals = sorted(np.reshape(cropIm,[-1]))
-    lVal,hVal = allVals[int(len(allVals)*0.02)],allVals[int(len(allVals)*0.98)]
-    lCap,hCap = 10,230
-    offset,stretch = lCap - lVal,(hCap-lCap)/(hVal-lVal)
-    finIm = np.clip((cropIm+offset)*stretch,lCap,hCap).astype(np.uint8)
-    #crop out the voter tallies and save the image
-    cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg',finIm )
-    return True
+
+    cropIm = rIm[cy:cy+ch,cx:cx+cw]
+    if not (cropIm.shape[0] > 0 and cropIm.shape[1] > 0):
+        return False
+    #increase the contrast of the image
+    ctIm = setImageContrast(cropIm,0,255)
+    #save the image
+    if saveIm:
+        cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg',ctIm)
+    return ctIm
+
+def cropTallyEpsilon(im,imId,model,saveIm = True):
+    im = im[:im.shape[0]//2]
+    inference = model.inferImage(im,imId)
+    targets = ["logo","qr","qrTl","qrTr","qrBr"]
+    if not all([any([x[0] == tg and x[2] > 0.85 for x in inference]) for tg in targets]):
+        print("Dead due to low confidence targets")
+        return False
+
+    #get best targets found
+    locs = dict()
+    for tg,bounds,conf in inference:
+        if tg not in locs.keys():
+            locs[tg] = [[(bounds[0]+bounds[2])//2,(bounds[1]+bounds[3])//2],
+                        [bounds[2]-bounds[0],bounds[3]-bounds[1]],conf]
+        else:
+            if conf > locs[tg][2]:
+                locs[tg] = [[(bounds[0]+bounds[2])//2,(bounds[1]+bounds[3])//2],
+                        [bounds[2]-bounds[0],bounds[3]-bounds[1]],conf]
+
+
+
+    #straighten form
+    tVec = [locs['qrTr'][0][i]-locs['qrTl'][0][i] for i in range(2)]
+    rVec = [locs['qrBr'][0][i]-locs['qrTr'][0][i] for i in range(2)]
+    cVec = [locs['qr'][0][i]-locs['logo'][0][i] for i in range(2)]
+
+    tAngle,cAngle = math.degrees(math.atan(tVec[1]/tVec[0])),math.degrees(math.atan(cVec[1]/cVec[0]))
+    rAngle = math.degrees(math.atan(rVec[0]/rVec[1]))
+    imRot = cAngle * 0.5 + tAngle * 0.25 + rAngle * 0.25
+
+    if abs(imRot) > 2.5:
+        rIm = utilityFunctions.rotateImage(im,imRot)
+
+        #rotatePoints
+        for k,v in locs.items():
+            locs[k] = [utilityFunctions.rotatePoint([im.shape[i]//2 for i in range(2)],v[0],-imRot),v[1],v[2]]
+    else:
+        rIm = np.copy(im)
+
+    #crop out votetallies
+    relativeTallyPos = {
+        "logo":[0.6984, 2.6159, 2.5773, 2.5773],
+        "qr":[-0.4524, 1.9649, 1.9417, 1.9493],
+        "qrBr":[-1.9670, 4.9171, 5.4945, 5.5248],
+        "qrTl":[-0.5567, 6.1398, 5.4054, 5.3763],
+        "qrTr":[-1.9617, 6.2928, 5.4644, 5.5248]
+    }
+
+    cropEstimates = []
+    for k,v in relativeTallyPos.items():
+        center,size,conf = locs[k]
+        x,y,w,h = v
+        estimate = [center[0]+size[0]*x,center[1]+size[1]*y,w*size[0],h*size[1]]
+        cropEstimates.append([estimate,conf])
+
+    sumEstimate = [0,0,0,0]
+    for est,conf in cropEstimates:
+        sumEstimate = [d+est[di]*conf for di,d in enumerate(sumEstimate)]
+
+    cx,cy,cw,ch = [int(d/sum([x[1] for x in cropEstimates])) for d in sumEstimate]
+
+    cropIm = rIm[cy:cy+ch,cx:cx+cw]
+    if not (cropIm.shape[0] > 0 and cropIm.shape[1] > 0):
+        return False
+
+    # increase the contrast of the image
+    ctIm = setImageContrast(cropIm, 0, 255)
+
+
+    # save the image
+    if saveIm:
+        cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg', ctIm)
+    return ctIm
+
+
+
+
+
+
+
+
+    return im
+
 # endregion
 
 
 # region UNUSED FUNCTIONS
+def cropTallyTheta(im,imId):
+    fIm = im[int(im.shape[0]*1/6):int(im.shape[0] * 1/2),int(im.shape[1]*2/3):]
+    cv2.imwrite(f'iebc_forms/imgcrops/{imId}.jpg', fIm)
+    return True
+
 def readChars(img,crop=False):
     img_path = f'iebc_forms/imgs/{img}.jpg'
     if crop:
         img_path = f'iebc_forms/imgcropsfin/{img}.jpg'
 
-    result = ocr.ocr(img_path, cls=True)
+    result = OCR.ocr(img_path, cls=True)
     topBound = None
     bottomBound = None
     for bounds,text in result:
@@ -299,19 +420,29 @@ def cropForm(im):
 
 # region VOTE TALLY COUNT FUNCTIONS
 #get number of votes for each candidate
-def getVoterTalliesCrop(path):
-    root,county,pdf = path.split("/")
+def getVoterTallies(root, county, pdf, dgModel,qrModel,method="epsilon"):
     filename = pdf.split(".")[0]
     im = pdfToImage(filename, root, county)
 
     # crop out the general location of the vote tallies on the form
-    cropTallyGamma(im,filename.split("_")[3])
-    #cropTallyAlpha(filename)
-    #cleanCrop(filename)
-    '''if charsFound:
-        votes = digitRecognition.deriveDigits(filename)  # extract the vote tallies
-        return votes
-    return []'''
+    imIdx = filename.split("_")[3]
+    if os.path.exists(f"iebc_forms/imgcrops/{imIdx}.jpg") and method == "epsilon":
+        cropIm = cv2.imread(f"iebc_forms/imgcrops/{imIdx}.jpg")
+    elif method == "epsilon":
+        cropIm = cropTallyEpsilon(im,imIdx,qrModel)
+    elif method == "gamma":
+        cropIm = cropTallyGamma(im,imIdx)
+
+    if not isinstance(cropIm,np.ndarray):
+        return False
+
+    inference = dgModel.inferImage(cropIm, imIdx, "imgscropsfin")
+    votes = processRawData(inference)
+    if not len(votes):
+        print('Failed inference ',method)
+        return False
+    return [imIdx,votes]
+
 
 def weighLine(digits):
     digits = sorted(digits,key=lambda x:x[1][0])
@@ -381,7 +512,7 @@ def getLocationCodes():
     keys,values = rows[0],rows[1:]
     kdata = dict()
     for v in values:
-        pid = padVal(v[keys.index("pollingStationId")].strip(),15)
+        pid = utilityFunctions.padVal(v[keys.index("pollingStationId")].strip(),15)
         kdata[pid] = {
             "COUNTY":v[keys.index("countyName")],
             "CONSTITUENCY":v[keys.index("constituency name")],
@@ -425,45 +556,71 @@ def compileTallyData(data):
 
 
 
-def processRawData(rawData):
-    finData = dict()
-    for k,v in rawData.items():
-        if len(v) < 12:
-            continue
-        finData[k] = getEachLineBeta(v)
-    return finData
+def processRawData(inference):
+    if len(inference) < 12:
+        return []
+    return getEachLineBeta(inference)
 
 def addToVotes(votes,newVotes):
     order = ["raila","ruto","waihiga","wajackoyah"]
     for vi,v in enumerate(newVotes[:len(order)]):
         votes[order[vi]] += v
 
-def iterateForms():
+def iterateForms(formsPath = "I:\IEBC_DATA\FORM34A"):
     global CANDIDATES
-    for county in os.listdir("ALL_FORMS"):
+    dgModel = YOLOModel("mnist")
+    qrModel = YOLOModel("qr")
+
+    #'''
+    if os.path.exists("iebc_forms/tallyData/voteTallies.p"):
+        voteTallies = pickle.load(open("iebc_forms/tallyData/voteTallies.p", "rb"))
+    else:
+        voteTallies = {cd: 0 for cd in CANDIDATES}
+
+    if os.path.exists("iebc_forms/tallyData/allVotes.p"):
+        allVotes = pickle.load(open("iebc_forms/tallyData/allVotes.p", "rb"))
+    else:
+        allVotes = dict()
+    for county in os.listdir(formsPath):
         print(f"Processing {county}")
-        forms = os.listdir(f"ALL_FORMS/{county}")
+        forms = os.listdir(os.path.join(formsPath,county))
         totalForms = len(forms)
         for fi,form in enumerate(forms):
-            getVoterTalliesCrop(f"ALL_FORMS/{county}/{form}")
+            if form.split("_")[3] in allVotes.keys():
+                print(f"form {fi + 1} out of {totalForms} already exists")
+                LOSS_RATE[0] += 1
+                continue
+            for cropMethod in ["epsilon","gamma"]:
+                ret = getVoterTallies(formsPath, county, form, dgModel,qrModel,method=cropMethod)
+                if isinstance(ret,list):
+                    fId,fVotes = ret
+                    break
+            if ret == False:
+                LOSS_RATE[1]+=1
+                continue
+            LOSS_RATE[0]+=1
+            allVotes[fId] = fVotes
+
+            for ti, tally in enumerate(fVotes[1][-4:]):
+                voteTallies[CANDIDATES[ti]] += tally
+
+            if fi == len(forms)-1 or fi%25 == 0:
+                pickle.dump(voteTallies, open("iebc_forms/tallyData/voteTallies.p", "wb"))
+                pickle.dump(allVotes, open("iebc_forms/tallyData/allVotes.p", "wb"))
             print(f"processed form {fi+1} out of {totalForms}")
-        break #'''
-    rawData = neuralNet.runAlpha()
-    votes = processRawData(rawData)
 
-    #count votes
-    voteTallies = {cd:0 for cd in CANDIDATES}
-    for k,v in votes.items():
-        for ti,tally in enumerate(v[1][-4:]):
-            voteTallies[CANDIDATES[ti]]+=tally
+        #'''
 
-    #save csv files
-    compileTallyData(votes)
+    #save data
+    compileTallyData(allVotes)
 
+    print(f"primary loss rate is {LOSS_RATE}")
+    print(f"Final tallies are {voteTallies}")
 
-    pickle.dump(voteTallies,open("iebc_forms/tallyData/finTally.p","wb"))
     print("done")
 # endregion
 
 if __name__ == '__main__':
+    LOSS_RATE = [0, 0]
+    OCR = PaddleOCR(use_angle_cls=True, lang='en',show_log = False,use_gpu=True)
     iterateForms()

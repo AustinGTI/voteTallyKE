@@ -1,6 +1,5 @@
 import cv2,os,math,random,csv,pickle
 import numpy as np
-from perlin_noise import PerlinNoise
 
 
 #Generating training data specific to the general voter tally template to be trained on a YOLO v3 model
@@ -11,6 +10,8 @@ from perlin_noise import PerlinNoise
 #5,000 training data - 6 digits each
 
 #the 11 possible classes
+import utilityFunctions
+
 CLASSES = list("0123456789d")
 
 #utility funcs
@@ -154,53 +155,73 @@ def createDigitGrid(allImgs):
     return ffinGrid,finBounds
 
 
-def createBaseNoiseMaps(n,gw,gh,chd):
-    NOISE_FG = PerlinNoise(octaves=20, seed=random.randrange(1, 10000))
-    NOISE_MG = PerlinNoise(octaves=10, seed=random.randrange(1, 10000))
-    NOISE_BG = PerlinNoise(octaves=5, seed=random.randrange(1, 10000))
-    genNoiseMap = lambda func, w=gw, h=gh, div=10: \
-        cv2.resize(np.array([[func([x / (h / div), y / (h / div)])
-                              for x in range(w // div)] for y in range(h // div)]), (w, h))
-
-    noiseMaps = []
-    charNoiseMaps = []
-    for i in range(n):
-        print("Creating Noise Maps ",i+1)
-        noiseMaps.append(genNoiseMap(NOISE_BG) * 0.3 + genNoiseMap(NOISE_MG) * 0.3 + genNoiseMap(NOISE_FG) * 0.4)
-        charNoiseMaps.append(genNoiseMap(NOISE_MG, chd, chd, div=4))
-    return noiseMaps,charNoiseMaps
 
 
-def pickNoiseMaps(nps,chnps):
-    return random.choice(nps),random.choice(chnps)
+
+
 
 def createDigitGridAlpha(allImgs,nps,chnps):
-    gw,gh = [500,1000]
-    yPad = random.normalvariate(150,30)
-    xPad = random.normalvariate(100,20)
+    gw,gh = [1000,1000]
+    yPad = int(random.normalvariate(150,30))
+    xPad = int(random.normalvariate(100,20))
+
+    edgeWidth = xPad-70
+    edgeGrad = random.normalvariate(0,0.02)
+
+    edgeDetail, edgeScale = int(random.normalvariate(16,2)), 1
+    ofst = int(min(5,max(1,random.normalvariate(3,0.5))))
     lHeight = random.normalvariate(100,7)
     grid = np.zeros([gh,gw],dtype=np.uint8)
+
+    #add background pattern
+    bgOffset = [random.randrange(-30, 30), random.randrange(-30, 30)]
+    x, y, tx, ty = 300 + bgOffset[0], 450 + bgOffset[1], 300 + 1000 + bgOffset[0], 450 + 1000 + bgOffset[1]
+    bg = cv2.resize((255 - cv2.cvtColor(cv2.imread('configData/talliesBg.png'),
+                                        cv2.COLOR_BGR2GRAY)[x:tx, y:ty]) // 2, (gw, gh))
+    bgK = int(random.normalvariate(10,2))*2+1
+    bg = cv2.GaussianBlur(bg,(bgK,bgK),0)
+    grid = np.max([grid,bg],axis=0)
 
     l = 0
     #vertical line
     xPos = int(gw-xPad)
-    cv2.line(grid,(xPos,int(yPad)),(xPos,gh-1),(200),3)
+    cv2.line(grid,(xPos,int(yPad)),(xPos,gh-1),(200),ofst*2+1)
     while True:
         yPos = int(yPad+lHeight*l)
+        xPosV = int(gw-xPad)
         #horizontal line
-        cv2.line(grid,(0,yPos),(int(gw-xPad),yPos),(200),3)
+        cv2.line(grid,(0,yPos),(xPosV,yPos),(200),ofst*2-1)
+        #edge curve
+        for edge in range(edgeDetail):
+            cv2.line(grid,(xPosV-ofst-((edgeDetail*edgeScale)-(edge*edgeScale)),yPos+ofst),
+                     (xPosV-ofst,yPos+(edge*edgeScale)+ofst),(200),2)
+            if l != 0:
+                cv2.line(grid,(xPosV-ofst-((edgeDetail*edgeScale)-(edge*edgeScale)),yPos-ofst),
+                     (xPosV-ofst,yPos-(edge*edgeScale)-ofst),(200),2)
         if l >= 5:
-            cv2.line(grid,(0,yPos+int(lHeight*0.3)),(int(gw-xPad),yPos),(200),7)
+            cv2.line(grid,(0,yPos+int(lHeight*0.7)),(int(gw-xPad),yPos),(200),7)
         l+=1
 
         if (yPad+lHeight*l) > gh:
             break
+
+    #add edge background
+    if edgeWidth > 0:
+        p1 = [grid.shape[1]-(edgeWidth+edgeGrad*grid.shape[0]),0]
+        p2 = [grid.shape[1]-1,0]
+        p3 = [grid.shape[1]-1,grid.shape[0]-1]
+        p4 = [grid.shape[1]-(edgeWidth-edgeGrad*grid.shape[0]),grid.shape[0]-1]
+        pts = np.array([p1,p2,p3,p4],dtype=np.int32)
+        cv2.fillPoly(grid,[pts],(random.randrange(30,220)))
+
+
+
     grid = cv2.blur(np.random.normal(1,0.5,(gh,gw))*grid,(5,5))
-    grid  = np.max([grid,cv2.blur(np.random.normal(100,20,(1000,500)).astype(np.uint8),(9,9))],axis=0)
+    grid  = np.clip(grid.astype(np.uint16)*cv2.blur(np.random.normal(1,0.4,(gw,gh)),(7,7)),0,255)
 
 
 
-    noiseMap,charNoiseMap = pickNoiseMaps(nps,chnps)
+    noiseMap,charNoiseMap = utilityFunctions.pickNoiseMap(nps),utilityFunctions.pickNoiseMap(chnps)
 
 
     grid += grid*noiseMap*random.normalvariate(0.6,0.2)
@@ -225,7 +246,7 @@ def createDigitGridAlpha(allImgs,nps,chnps):
     #myDigits = [random.choice(pDigits,) for i in range(lines * perLine)]  # random set of digits (rows * perLine)
     baseChars = [cv2.imread(random.choice(allImgs[nm]), 0) for nm in myDigits]
     bx,by = (gw-xPad,yPad+(lHeight if lines == 4 else 0))
-    dDist = min(0.4,abs(random.normalvariate(0,0.15)))
+    dDist = min(0.4,abs(random.normalvariate(0,0.3)))
     bounds = []
 
 
@@ -242,7 +263,7 @@ def createDigitGridAlpha(allImgs,nps,chnps):
             ch,cw = cimg.shape
             idx,idy = bx-boffset-cw//2,by+lHeight*li+lHeight//2
             cx,cy = map(lambda x:int(round(x)),
-                        [random.normalvariate(idx,lHeight//10),random.normalvariate(idy,lHeight//10)])
+                        [random.normalvariate(idx,lHeight//20),random.normalvariate(idy,lHeight//20)])
             grid[cy-ch//2:cy-ch//2+ch,cx-cw//2:cx-cw//2+cw] = \
                 np.max([cimg,grid[cy-ch//2:cy-ch//2+ch,cx-cw//2:cx-cw//2+cw]],axis=0)
             bounds.append([CLASSES.index(tdig),[cx/gw,cy/gh,(cw*1.2)/gw,(ch*1.2)/gh]])
@@ -375,7 +396,8 @@ def createDataset(n,split = [0.8,0.15,0.05]):
     global CLASSES
     chars = pickle.load(open(f"mnistData/trainImPaths.p","rb"))
     counts = [0,0,0]
-    noiseMaps,charNoiseMaps = createBaseNoiseMaps(50,500,1000,112) #change this if the size of the imgs changes
+    noiseMaps = utilityFunctions.createNoiseMaps(100, 1000, 1000) #change this if the size of the imgs
+    charNoiseMaps = utilityFunctions.createNoiseMaps(100,112,112,[10],[1],div=4)
     for b in range(n):
         for si in range(len(split)):
             if b/n < sum(split[:si+1]):
@@ -400,5 +422,5 @@ def createDataset(n,split = [0.8,0.15,0.05]):
 
 if __name__ == '__main__':
     #extractData()
-        createDataset(1000)
+        createDataset(2000)
                   #absPath="C:/Users/Admin/PycharmProjects/YOLO/Data/Source_Images/Training_Images_Mnist")

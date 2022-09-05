@@ -204,7 +204,7 @@ def runAlpha(  # model.pt path(s)
         half=False,  # use FP16 half-precision inference
         dnn=False,  # use OpenCV DNN for ONNX inference
              ):
-    weights = 'modelData/mnist_nano_v3.pt'
+    weights = 'modelData/mnist_nano_v6.pt'
     data = 'modelData/mnist.yaml'
     source = str(source)
 
@@ -275,6 +275,158 @@ def runAlpha(  # model.pt path(s)
     return results
 
 
+class YOLOModel:
+    def __init__(self,target):
+        possibleTargets = {
+            "qr":{
+                "weights":'modelData/qr_nano_v1.pt',
+                "data":'modelData/qr.yaml'
+            },
+            "mnist": {
+                "weights": 'modelData/mnist_nano_v6.pt',
+                "data": 'modelData/mnist.yaml'
+            }
+        }
+        # dataset.yaml path
+        imgsz = (640, 640)  # inference size (height, width)
+        half = False # use FP16 half-precision inference
+        dnn = False  # use OpenCV DNN for ONNX inference
+        device = ''  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+        self.weights = possibleTargets[target]["weights"]
+        self.data = possibleTargets[target]["data"]
+
+        self.device = select_device(device)
+        self.model = DetectMultiBackend(self.weights, device=self.device, dnn=dnn, data=self.data, fp16=half)
+        stride, pt = self.model.stride, self.model.pt
+        self.img_size = check_img_size(imgsz, s=stride)  # check image size
+        bs = 1  # batch_size
+        self.model.warmup(imgsz=(1 if pt else bs, 3, *imgsz))  # warmup
+
+    def inferImage(self, im0s,pIdx,saveIms = ''):
+        conf_thres = 0.25  # confidence threshold
+        iou_thres = 0.45  # NMS IOU threshold
+        max_det = 1000  # maximum detections per image
+        classes = None  # filter by class: --class 0, or --class 0 2 3
+        agnostic_nms = False  # class-agnostic NMS
+        augment = False  # augmented inference
+        names = self.model.names
+        # Padded resize
+        im = letterbox(im0s, self.img_size, stride=self.model.stride, auto=self.model.pt)[0]
+        im = im.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
+        im = np.ascontiguousarray(im)
+        im = torch.from_numpy(im).to(self.device)
+        im = im.half() if self.model.fp16 else im.float()  # uint8 to fp16/32
+        im /= 255  # 0 - 255 to 0.0 - 1.0
+        if len(im.shape) == 3:
+            im = im[None]  # expand for batch dim
+
+        # Inference
+        # visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+        pred = self.model(im, augment=augment, visualize=False)
+        # NMS
+        pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+        imResults = []
+        det = pred[0]
+
+        # p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
+        im0 = im0s.copy()
+        annotator = Annotator(im0, line_width=2, example=str(names), font_size=15)
+
+        if len(det):
+            # Rescale boxes from img_size to im0 size
+            det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+
+            # Write results
+            for *xyxy, conf, cls in reversed(det):
+                imResults.append([names[int(cls)], [int(x) for x in xyxy], float(conf)])
+                # bounding the digits
+                c = int(cls)  # integer class
+                label = f'{names[c]} {conf:.2f}'
+                annotator.box_label(xyxy, label, color=colors(c, True))
+        if len(saveIms) != 0:
+            cv2.imwrite(f'iebc_forms/{saveIms}/{pIdx}.jpg', im0)
+        return imResults
+
+
+def findQR(  # model.pt path(s)
+        source='iebc_forms/pdfs',
+        model = None,# file/dir/URL/glob, 0 for webcam
+          # dataset.yaml path
+        imgsz=(640, 640),  # inference size (height, width)
+        conf_thres=0.25,  # confidence threshold
+        iou_thres=0.45,  # NMS IOU threshold
+        max_det=1000,  # maximum detections per image
+        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+        classes=None,  # filter by class: --class 0, or --class 0 2 3
+        agnostic_nms=False,  # class-agnostic NMS
+        augment=False,  # augmented inference
+        half=False,  # use FP16 half-precision inference
+        dnn=False,  # use OpenCV DNN for ONNX inference
+             ):
+    weights = 'modelData/qr_nano_v1.pt'
+    data = 'modelData/qr.yaml'
+    source = str(source)
+
+    # Directories
+    # save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
+    # (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
+
+    # Load model
+    device = select_device(device)
+    model = DetectMultiBackend(weights, device=device, dnn=dnn, data=data, fp16=half)
+    stride, names, pt = model.stride, model.names, model.pt
+    imgsz = check_img_size(imgsz, s=stride)  # check image size
+
+    # Dataloader
+    dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
+    bs = 1  # batch_size
+
+    # Run inference
+    model.warmup(imgsz=(1 if pt else bs, 3, *imgsz))  # warmup
+    seen, windows, dt = 0, [], [0.0, 0.0, 0.0]
+    results = dict()
+    for path, im, im0s, _, _ in dataset:
+        im = torch.from_numpy(im).to(device)
+        im = im.half() if model.fp16 else im.float()  # uint8 to fp16/32
+        im /= 255  # 0 - 255 to 0.0 - 1.0
+        if len(im.shape) == 3:
+            im = im[None]  # expand for batch dim
+
+        # Inference
+        # visualize = increment_path(save_dir / Path(path).stem, mkdir=True) if visualize else False
+        pred = model(im, augment=augment, visualize=False)
+
+        # NMS
+        pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
+
+        # Second-stage classifier (optional)
+        # pred = utils.general.apply_classifier(pred, classifier_model, im, im0s)
+
+        # Process predictions
+        imResults = []
+        det = pred[0]
+        seen += 1
+
+        # p, im0, frame = path, im0s.copy(), getattr(dataset, 'frame', 0)
+        im0 = im0s.copy()
+        annotator = Annotator(im0, line_width=2, example=str(names), font_size=15)
+
+        if len(det):
+            # Rescale boxes from img_size to im0 size
+            det[:, :4] = scale_coords(im.shape[2:], det[:, :4], im0.shape).round()
+
+            # Write results
+            for *xyxy, conf, cls in reversed(det):
+                imResults.append([names[int(cls)], [int(x) for x in xyxy], float(conf)])
+                # bounding the digits
+                c = int(cls)  # integer class
+                label = f'{names[c]} {conf:.2f}'
+                annotator.box_label(xyxy, label, color=colors(c, True))
+        pIdx = path.split("\\")[-1].split(".")[0]
+        cv2.imwrite(f'iebc_forms/pdfcrops/{pIdx}.jpg', im0)
+        results[pIdx] = imResults
+        print(f"{pIdx} done")
+    return results
 
 
 

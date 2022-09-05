@@ -1,0 +1,8 @@
+path: ../datasets/qr
+train: images/trainSet
+val: images/valSet
+test: images/testSet
+
+
+nc: 5
+names : ['logo','qr','qrTl','qrTr','qrBr']
