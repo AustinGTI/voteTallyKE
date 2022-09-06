@@ -5,3 +5,6 @@
 /mnistData/
 /ALL_FORMS/
 /targetData/
+/trainDataGeneration/mnist/
+/trainDataGeneration/qr/
+/trainDataGeneration/tgt/

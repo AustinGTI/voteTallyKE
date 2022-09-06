@@ -52,7 +52,7 @@ def calculateRowsColumns(im,tBox):
 
 def extractPdfData(path="targetData/pdfPages"):
     #ocr = PaddleOCR(use_angle_cls=True, lang='en',show_log = False)
-    model = neuralNet.YOLOModel("mnist")
+    model = neuralNet.YOLOModel("tgt")
     rowEntries,columnEntries = None,None
     bBox = [185,495,2128,3113]
     columns = ["CountyCode","CountyName","ConstituencyCode","ConstituencyName","PollingStationCode",
@@ -81,6 +81,7 @@ def extractPdfData(path="targetData/pdfPages"):
                 colIm = cv2.resize(rowIm[:,col[0]:col[1]], (0, 0), fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
                 #value = ocr.ocr(colIm, cls=True)
                 inference = model.inferImage(colIm,'000')
+                inference = [inf for inf in inference if inf[2] > 0.75]
                 if len(inference) > 0:
                     value = ''.join([v[0] for v in sorted(inference, key=lambda x: x[1][0])])
                     rowData[columns[ci]] = value

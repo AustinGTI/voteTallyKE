@@ -420,7 +420,7 @@ def cropForm(im):
 
 # region VOTE TALLY COUNT FUNCTIONS
 #get number of votes for each candidate
-def getVoterTallies(root, county, pdf, dgModel,qrModel,method="epsilon"):
+def getVoterTallies(root, county, pdf, dgModel,qrModel,method="epsilon",saveVis = True):
     filename = pdf.split(".")[0]
     im = pdfToImage(filename, root, county)
 
@@ -441,6 +441,33 @@ def getVoterTallies(root, county, pdf, dgModel,qrModel,method="epsilon"):
     if not len(votes):
         print('Failed inference ',method)
         return False
+    if saveVis:
+        #create a visualization of the tallies
+        visIm = np.copy(cropIm)
+        global CANDIDATES
+        colors = [(0,0,200),(200,200,0),(0,200,0),(200,0,0)]
+        cds, tlys = votes
+        for vi,vCount in enumerate(cds):
+            tBx = [visIm.shape[0],visIm.shape[1],0,0]
+            for _,box,_ in vCount:
+                tBx = [min(tBx[0],box[0]),min(tBx[1],box[1]),
+                              max(tBx[2],box[2]),max(tBx[3],box[3])]
+            cv2.rectangle(visIm,(tBx[0],tBx[1]),(tBx[2],tBx[3]),colors[vi],3)
+
+            #place text
+            padding = 10
+            fontSize = 1.25
+            txtSize = cv2.getTextSize(f"{CANDIDATES[vi]} : {tlys[vi]}",cv2.FONT_HERSHEY_SIMPLEX,fontSize,3)[0]
+            txtSize = [txtSize[i]+padding*2 for i in range(2)]
+            rX,rY = tBx[0]-txtSize[0],(tBx[3]+tBx[1])//2 - txtSize[1]//2
+            rectPts = np.array([[(rX,rY),(rX+txtSize[0],rY),(rX+txtSize[0],rY+txtSize[1]),(rX,rY+txtSize[1])]])
+            cv2.fillPoly(visIm,rectPts,colors[vi])
+            cv2.putText(visIm,f"{CANDIDATES[vi]} : {tlys[vi]}",
+                        (rX,rY+txtSize[1]-padding),cv2.FONT_HERSHEY_SIMPLEX,fontSize,(255,255,255),3)
+
+        visIm = cv2.cvtColor(visIm, cv2.COLOR_BGR2RGB)
+        cv2.imwrite(f"iebc_forms/imgcropsfin/{imIdx}.jpg",visIm)
+
     return [imIdx,votes]
 
 
@@ -461,7 +488,7 @@ def compareWeights(wa,wb,priorities = [0.6,0.3,0.1]):
 
 def getEachLineBeta(values):
     lines = []
-    values = sorted(values,key=lambda x:(x[1][1]+x[1][3])/2)
+    values = sorted([v for v in values if v[2] > 0.5],key=lambda x:(x[1][1]+x[1][3])/2)
     getMidY = lambda x:(x[1][1]+x[1][3])/2
     gaps = [getMidY(values[vi+1])-getMidY(values[vi])
             for vi in range(len(values)-1)]
@@ -470,13 +497,27 @@ def getEachLineBeta(values):
     for gi,gap in enumerate(gaps):
         if gap > avgHeight*0.333:
             line = values[prevJump:gi+1]
-            if len(line) >= 3:
-                lines.append(line)
+            #if len(line) >= 2:
+            lines.append(line)
             prevJump = gi+1
-        if gi == len(gaps)-1 and gi+2 - prevJump >= 3:
+        if gi == len(gaps)-1 and gi+2 - prevJump >= 0:
             lines.append(values[prevJump:gi+2])
 
-    lines = [sorted(sorted(line,key=lambda x:x[2],reverse=True)[:3],key=lambda x:x[1][0]) for line in lines][-4:]
+    lines = [sorted(sorted(line,key=lambda x:x[2],reverse=True)[:3],key=lambda x:x[1][0]) for line in lines]
+    if len(lines) < 4:
+        return []
+    if len(lines) > 4:
+        bestGroup = None
+        for group in itertools.combinations([[li,ln] for li,ln in enumerate(lines)],4):
+            conf = np.mean([sum([dg[2] for dg in ln]) / len(ln) for _,ln in group])
+            dist = np.var([sum([(bds[2] + bds[0]) / 2 for _, bds, _ in ln]) / len(ln) for _,ln in group])
+            if bestGroup == None or conf/dist > bestGroup[1]:
+                bestGroup = [group,conf/dist]
+        flines = sorted([[li,ln] for li,ln in list(bestGroup[0])],key=lambda x:x[0])
+        lines = [ln for _,ln in flines]
+
+
+
     tallies = [int(''.join([dg[0] for dg in line])) for line in lines]
     return lines,tallies
 
@@ -557,8 +598,6 @@ def compileTallyData(data):
 
 
 def processRawData(inference):
-    if len(inference) < 12:
-        return []
     return getEachLineBeta(inference)
 
 def addToVotes(votes,newVotes):
@@ -581,15 +620,15 @@ def iterateForms(formsPath = "I:\IEBC_DATA\FORM34A"):
         allVotes = pickle.load(open("iebc_forms/tallyData/allVotes.p", "rb"))
     else:
         allVotes = dict()
-    for county in os.listdir(formsPath):
+    for county in os.listdir(formsPath):#WAS STOPPED AT MIGORI COUNTY
         print(f"Processing {county}")
         forms = os.listdir(os.path.join(formsPath,county))
         totalForms = len(forms)
         for fi,form in enumerate(forms):
-            if form.split("_")[3] in allVotes.keys():
+            '''if form.split("_")[3] in allVotes.keys():
                 print(f"form {fi + 1} out of {totalForms} already exists")
                 LOSS_RATE[0] += 1
-                continue
+                continue #'''
             for cropMethod in ["epsilon","gamma"]:
                 ret = getVoterTallies(formsPath, county, form, dgModel,qrModel,method=cropMethod)
                 if isinstance(ret,list):
@@ -608,6 +647,8 @@ def iterateForms(formsPath = "I:\IEBC_DATA\FORM34A"):
                 pickle.dump(voteTallies, open("iebc_forms/tallyData/voteTallies.p", "wb"))
                 pickle.dump(allVotes, open("iebc_forms/tallyData/allVotes.p", "wb"))
             print(f"processed form {fi+1} out of {totalForms}")
+
+
 
         #'''
 

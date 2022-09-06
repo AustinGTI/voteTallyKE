@@ -1,5 +1,6 @@
 import cv2,os,math,random,csv,pickle
 import numpy as np
+from trainDataGeneration import generateDataset
 
 
 #Generating training data specific to the general voter tally template to be trained on a YOLO v3 model
@@ -160,13 +161,18 @@ def createDigitGrid(allImgs):
 
 
 
-def createDigitGridAlpha(allImgs,nps,chnps):
+def createDigitGridAlpha(*args):
+    noiseMaps,templatesIms,allImgs = args
+    talliesBg,IEBCStamp = templatesIms
+    allImgs = allImgs[0]
+    nps, chnps = noiseMaps
     gw,gh = [1000,1000]
     yPad = int(random.normalvariate(150,30))
     xPad = int(random.normalvariate(100,20))
 
     edgeWidth = xPad-70
     edgeGrad = random.normalvariate(0,0.02)
+    upperTxtPos = yPad-150
 
     edgeDetail, edgeScale = int(random.normalvariate(16,2)), 1
     ofst = int(min(5,max(1,random.normalvariate(3,0.5))))
@@ -176,11 +182,30 @@ def createDigitGridAlpha(allImgs,nps,chnps):
     #add background pattern
     bgOffset = [random.randrange(-30, 30), random.randrange(-30, 30)]
     x, y, tx, ty = 300 + bgOffset[0], 450 + bgOffset[1], 300 + 1000 + bgOffset[0], 450 + 1000 + bgOffset[1]
-    bg = cv2.resize((255 - cv2.cvtColor(cv2.imread('configData/talliesBg.png'),
-                                        cv2.COLOR_BGR2GRAY)[x:tx, y:ty]) // 2, (gw, gh))
+    bg = cv2.resize((255 - talliesBg[x:tx, y:ty]) // 2, (gw, gh))
     bgK = int(random.normalvariate(10,2))*2+1
     bg = cv2.GaussianBlur(bg,(bgK,bgK),0)
     grid = np.max([grid,bg],axis=0)
+
+    # add edge background
+    if edgeWidth > 0:
+        p1 = [grid.shape[1] - (edgeWidth + edgeGrad * grid.shape[0]), 0]
+        p2 = [grid.shape[1] - 1, 0]
+        p3 = [grid.shape[1] - 1, grid.shape[0] - 1]
+        p4 = [grid.shape[1] - (edgeWidth - edgeGrad * grid.shape[0]), grid.shape[0] - 1]
+        pts = np.array([p1, p2, p3, p4], dtype=np.int32)
+        cv2.fillPoly(grid, [pts], (random.randrange(30, 220)))
+
+    #add text above form
+    cv2.putText(grid,"Code : 332423",(grid.shape[1]-800-yPad,upperTxtPos),cv2.FONT_HERSHEY_SIMPLEX,1,255,2)
+
+    #placing a stamp
+    if random.random() < 0.1:
+        IEBCStamp = 255-cv2.resize(IEBCStamp,(250,250))
+        utilityFunctions.rotateImage(IEBCStamp,random.normalvariate(0,20),255)
+        sx,sy = random.randint(0,grid.shape[1]-IEBCStamp.shape[1]),random.randint(0,grid.shape[0]-IEBCStamp.shape[0])
+        grid[sy:sy+IEBCStamp.shape[0],sx:sx+IEBCStamp.shape[1]] = \
+            np.max([IEBCStamp,grid[sy:sy+IEBCStamp.shape[0],sx:sx+IEBCStamp.shape[1]]],axis=0)
 
     l = 0
     #vertical line
@@ -205,14 +230,8 @@ def createDigitGridAlpha(allImgs,nps,chnps):
         if (yPad+lHeight*l) > gh:
             break
 
-    #add edge background
-    if edgeWidth > 0:
-        p1 = [grid.shape[1]-(edgeWidth+edgeGrad*grid.shape[0]),0]
-        p2 = [grid.shape[1]-1,0]
-        p3 = [grid.shape[1]-1,grid.shape[0]-1]
-        p4 = [grid.shape[1]-(edgeWidth-edgeGrad*grid.shape[0]),grid.shape[0]-1]
-        pts = np.array([p1,p2,p3,p4],dtype=np.int32)
-        cv2.fillPoly(grid,[pts],(random.randrange(30,220)))
+
+
 
 
 
@@ -244,7 +263,7 @@ def createDigitGridAlpha(allImgs,nps,chnps):
     myDigits = [d for v in potentialVotes for d in reversed(list(padString(v,3)))]
 
     #myDigits = [random.choice(pDigits,) for i in range(lines * perLine)]  # random set of digits (rows * perLine)
-    baseChars = [cv2.imread(random.choice(allImgs[nm]), 0) for nm in myDigits]
+    baseChars = [cv2.imread(f"../{random.choice(allImgs[nm])}", 0) for nm in myDigits]
     bx,by = (gw-xPad,yPad+(lHeight if lines == 4 else 0))
     dDist = min(0.4,abs(random.normalvariate(0,0.3)))
     bounds = []
@@ -335,7 +354,7 @@ def buildLine(axis,length,thickness = 3,completion = 0.8,gapSize = 0.1,noise = 0
 
 def extractData():
     global CLASSES
-    file_path = f"mnistData/mnist_train.csv"
+    file_path = f"../mnistData/mnist_train.csv"
     csvfile = csv.reader(open(file_path,"r"))
     data = {v:[] for v in CLASSES[:-1]}
     i = 0
@@ -351,7 +370,7 @@ def extractData():
         data[str(row[0])].append(impath)
         cv2.imwrite(impath,fimg)
 
-    file_path = f"mnistData/mnist_test.csv"
+    file_path = f"../mnistData/mnist_test.csv"
     csvfile = csv.reader(open(file_path, "r"))
     for row in csvfile:
         if i%1000 == 0:
@@ -365,7 +384,7 @@ def extractData():
         data[str(row[0])].append(impath)
         cv2.imwrite(impath,fimg)
 
-    pickle.dump(data,open(f"mnistData/trainImPaths.p","wb"))
+    pickle.dump(data, open(f"../mnistData/trainImPaths.p", "wb"))
 
 def generateAnnotationLine(path,bbounds):
     global CLASSES
@@ -394,7 +413,7 @@ def createDataset(n,split = [0.8,0.15,0.05]):
 
 
     global CLASSES
-    chars = pickle.load(open(f"mnistData/trainImPaths.p","rb"))
+    chars = pickle.load(open(f"../mnistData/trainImPaths.p", "rb"))
     counts = [0,0,0]
     noiseMaps = utilityFunctions.createNoiseMaps(100, 1000, 1000) #change this if the size of the imgs
     charNoiseMaps = utilityFunctions.createNoiseMaps(100,112,112,[10],[1],div=4)
@@ -421,6 +440,12 @@ def createDataset(n,split = [0.8,0.15,0.05]):
 
 
 if __name__ == '__main__':
-    #extractData()
-        createDataset(2000)
-                  #absPath="C:/Users/Admin/PycharmProjects/YOLO/Data/Source_Images/Training_Images_Mnist")
+    imPaths = pickle.load(open(f"../mnistData/trainImPaths.p", "rb"))
+    generateDataset(
+        n=100,
+        generator=createDigitGridAlpha,
+        folder="mnist",
+        noiseMaps=[[10, 1000,1000],[10,112,112,[10],[1],4]],
+        templatePaths=['../configData/talliesBg.png','../configData/IEBCStamp.png'],
+        extraData=[imPaths]
+    )

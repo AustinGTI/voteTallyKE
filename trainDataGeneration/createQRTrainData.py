@@ -2,6 +2,7 @@ import cv2,os,random,time
 import numpy as np
 
 import utilityFunctions
+from trainDataGeneration import generateDataset
 
 def createQRCode(size,padding = 0.2):
     black,white = int(255-random.expovariate(0.07)),int(random.expovariate(0.07))
@@ -39,10 +40,14 @@ def createQRCode(size,padding = 0.2):
 
     return qr,crnLocations
 
-def createForm(ftemplate,formBg,lg,noiseMaps):
+def createForm(*args):
+    #unpacking arguments
+    noiseMaps,tpltIms,_ = args
+    ftemplate, formBg, lg, = tpltIms
+    noiseMaps = noiseMaps[0]
     #layer images to create form
     lgbg = np.clip(cv2.blur(formBg,(5,5)).astype(np.uint16)+random.randint(100,200),0,255).astype(np.uint8)
-    rbg = cv2.resize(lgbg[360:3100, 300:2100, 0].astype(np.uint8), (ftemplate.shape[1], ftemplate.shape[0]))
+    rbg = cv2.resize(lgbg[360:3100, 300:2100].astype(np.uint8), (ftemplate.shape[1], ftemplate.shape[0]))
     form = np.min([rbg,ftemplate],axis=0)
     allcols = np.unique(form)
     fbgCol = random.choice([x for x in range(0,256) if x not in allcols])
@@ -112,14 +117,13 @@ def createDataset(n,split = [0.8,0.15,0.05]):
                     os.mkdir(os.path.join(root,mid,leaf))
 
 
-    global CLASSES
     counts = [0,0,0]
     noiseMaps = utilityFunctions.createNoiseMaps(50,700,700) #change this if the size of the imgs
 
     # import og images
-    formTemplate = cv2.imread("configData/FormTemplate.png", cv2.IMREAD_GRAYSCALE)
-    formBackground = cv2.imread("configData/talliesBg.png")
-    iebcLogo = cv2.imread("configData/iebcLogo.png", cv2.IMREAD_GRAYSCALE)
+    formTemplate = cv2.imread("../configData/FormTemplate.png", cv2.IMREAD_GRAYSCALE)
+    formBackground = cv2.imread("../configData/talliesBg.png")
+    iebcLogo = cv2.imread("../configData/iebcLogo.png", cv2.IMREAD_GRAYSCALE)
 
     for b in range(n):
         for si in range(len(split)):
@@ -144,4 +148,12 @@ def createDataset(n,split = [0.8,0.15,0.05]):
 
 
 if __name__ == '__main__':
-    createDataset(1000)
+    generateDataset(
+        n=100,
+        generator=createForm,
+        folder="qr",
+        noiseMaps=[[10,700,700]],
+        templatePaths=["../configData/FormTemplate.png","../configData/talliesBg.png","../configData/iebcLogo.png"],
+        extraData=[]
+    )
+    #createDataset(1000)

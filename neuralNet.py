@@ -285,6 +285,10 @@ class YOLOModel:
             "mnist": {
                 "weights": 'modelData/mnist_nano_v6.pt',
                 "data": 'modelData/mnist.yaml'
+            },
+            "tgt": {
+                "weights":'modelData/tgt_nano_v1.pt',
+                "data":'modelData/tgt.yaml'
             }
         }
         # dataset.yaml path
