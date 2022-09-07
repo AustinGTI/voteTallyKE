@@ -200,7 +200,7 @@ def createDigitGridAlpha(*args):
     cv2.putText(grid,"Code : 332423",(grid.shape[1]-800-yPad,upperTxtPos),cv2.FONT_HERSHEY_SIMPLEX,1,255,2)
 
     #placing a stamp
-    if random.random() < 0.1:
+    if random.random() < 1:
         IEBCStamp = 255-cv2.resize(IEBCStamp,(250,250))
         utilityFunctions.rotateImage(IEBCStamp,random.normalvariate(0,20),255)
         sx,sy = random.randint(0,grid.shape[1]-IEBCStamp.shape[1]),random.randint(0,grid.shape[0]-IEBCStamp.shape[0])

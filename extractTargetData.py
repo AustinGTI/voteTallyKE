@@ -68,7 +68,7 @@ def extractPdfData(path="targetData/pdfPages"):
                                               100,255,cv2.THRESH_BINARY)
         [1]/255,np.ones([5,5])),[*cvIm.shape[:2],1])
 
-        filIm = (maskIm*cvIm)+(1-maskIm)*np.full(cvIm.shape,255,np.uint8)
+        #filIm = (maskIm*cvIm)+(1-maskIm)*np.full(cvIm.shape,255,np.uint8)
 
         if rowEntries == None or columnEntries == None:
             rowEntries,columnEntries = calculateRowsColumns(cvIm,bBox)
@@ -78,12 +78,21 @@ def extractPdfData(path="targetData/pdfPages"):
             rowIm = cvIm[row[0]+bBox[1]:row[1]+bBox[1],bBox[0]:bBox[2]]
             rowData = {col:'' for col in columns}
             for ci,col in [[i,columnEntries[i]] for i in [4,6,7,8,9,10,11,12]]:
-                colIm = cv2.resize(rowIm[:,col[0]:col[1]], (0, 0), fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+                colIm = cv2.resize(rowIm[:,col[0]+20:col[1]], (0, 0), fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
                 #value = ocr.ocr(colIm, cls=True)
-                inference = model.inferImage(colIm,'000')
-                inference = [inf for inf in inference if inf[2] > 0.75]
+                inference,im = model.inferImage(colIm,'000',True)
+                inference = [inf for inf in inference if inf[2] > 0.5]
                 if len(inference) > 0:
-                    value = ''.join([v[0] for v in sorted(inference, key=lambda x: x[1][0])])
+                    dgts = sorted(inference,key=lambda x:x[1][0])
+                    num = [dgts[0]]
+                    for dgt,bds,conf in dgts[1:]:
+                        if bds[0] > num[-1][1][2] - (num[-1][1][2]-num[-1][1][0])/2:
+                            num.append([dgt,bds,conf])
+                        else:
+                            if conf > num[-1][2]:
+                                num[-1] = [dgt,bds,conf]
+
+                    value = ''.join([v[0] for v in num])
                     rowData[columns[ci]] = value
             pageEntries.append(rowData)
         with open("targetData/targetTallies.csv",'a',newline='') as file:

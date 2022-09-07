@@ -287,7 +287,7 @@ class YOLOModel:
                 "data": 'modelData/mnist.yaml'
             },
             "tgt": {
-                "weights":'modelData/tgt_nano_v1.pt',
+                "weights":'modelData/tgt_nano_v4.pt',
                 "data":'modelData/tgt.yaml'
             }
         }
@@ -306,7 +306,7 @@ class YOLOModel:
         bs = 1  # batch_size
         self.model.warmup(imgsz=(1 if pt else bs, 3, *imgsz))  # warmup
 
-    def inferImage(self, im0s,pIdx,saveIms = ''):
+    def inferImage(self, im0s,pIdx,saveIms = False):
         conf_thres = 0.25  # confidence threshold
         iou_thres = 0.45  # NMS IOU threshold
         max_det = 1000  # maximum detections per image
@@ -347,8 +347,9 @@ class YOLOModel:
                 c = int(cls)  # integer class
                 label = f'{names[c]} {conf:.2f}'
                 annotator.box_label(xyxy, label, color=colors(c, True))
-        if len(saveIms) != 0:
-            cv2.imwrite(f'iebc_forms/{saveIms}/{pIdx}.jpg', im0)
+        if saveIms:
+            return imResults,im0
+            #cv2.imwrite(f'iebc_forms/{saveIms}/{pIdx}.jpg', im0)
         return imResults
 
 
