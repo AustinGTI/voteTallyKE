@@ -82,8 +82,42 @@ There are certain key sentences that are present in all forms. For the highest l
 
 * **No of valid votes obtained**
 
+If at least one of these sentences is among those detected by PaddleOCR and the accuracy is at least 90%, the same procedure is carried out as with the QR code and logo method.
 
+PaddleOCR returns bounding boxes as well that make it possible to calculate the angle of rotation with trigonometry and rotate the image back to an upright position. The size and scale of the sentences is used to estimate the location of the tallies and that general area is cropped out.
 
+This is successful more than 90% of the time when the QR code and logo cannot be found which adds up to a success rate of up to 99% at finding and cropping out the estimated area where the tallies are located with a reasonable degree of certainty.
 
+### 3. digit detection and recognition
+
+Given the cropped out general area where the handwritten vote tallies lie, some image processing is performed to increase the contrast and hence visibility of the handwritten digits as well as reduce background noise.
+
+Subsequently, the handwritten digit recognition model can locate and recognize digits reliably though there are occassionally false positives on account of the random noise and artifacts that may be on the image.
+
+In order to parse out the correct digits from false positives, digits clustered along the same general y position are grouped together.
+
+From these clusters, several possibilities may arise:
+
+* if there are exactly 4 and none of them has more than 3 digits, they are read as the tallies of the 4 candidates and stored (this is the ideal situation)
+
+* If there are exactly 4 clusters and some of them have more than 3 digits, the digits with the highest confidence that do not overlap are chosen in each cluster and considered to be the tallies of the 4 candidates
+
+* If there are less than 4 clusters, it is considered a bad form and the system moves to the next one, There would be no point in recording tallies for some candidates and not others (this is quite rare)
+
+* If there are more than 4 clusters, all combinations of 4 clusters from the total are extracted and weighed based on location, width and number of digits. The ideal set of 4 will each have the same number of digits along roughly the same x position and of the same width. The set of 4 clusters that fit this criteria the closest are chosen and read as the tallies for each of the 4 candidates.
+  
+  
+
+### 4. Saving the data
+
+Each file name conveniently has a polling station code that can be used to determine the county, constituency , ward and polling center where the form came from. All of these details are saved for each form along with the tallies in a csv file if the previous operations were all successful. An image is generated displaying the extracted tallies next to the handwritten digits for easy confirmation and the system moves to the next form.
+
+---
+
+This process takes about 0.7 seconds per form at best and up to 16 seconds at worst when character recognition is used. For the roughly 46,000 polling stations this adds up to 10 - 24 hours for all the forms. If a GPU is used, the character recognition can be alot faster
+
+![system process diagram](https://github.com/AustinGTI/voteTallyKE/blob/master/metaAssets/readForm/readForm_v1.png?raw=true)
+
+# The Code
 
 
