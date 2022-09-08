@@ -287,7 +287,7 @@ class YOLOModel:
                 "data": 'modelData/mnist.yaml'
             },
             "tgt": {
-                "weights":'modelData/tgt_nano_v4.pt',
+                "weights":'modelData/tgt_nano_v5.pt',
                 "data":'modelData/tgt.yaml'
             }
         }

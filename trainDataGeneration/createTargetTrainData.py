@@ -17,7 +17,9 @@ def createNumberImg(nstr,nmaps):
     FONT_SIZE = int(random.normalvariate(25,3))
     IEBC_FONT = ImageFont.truetype('../configData/IEBC_Font/IEBC_Regular.ttf', size=FONT_SIZE)
     black,white = int(random.expovariate(0.2)),int(255-random.expovariate(0.2))
-    padding = random.randint(0,2)
+    padding = -2
+    ek = int(random.expovariate(1.5))+1
+
     chrSizes = []
 
     im = np.full(isize, white, dtype=np.uint8)
@@ -25,9 +27,9 @@ def createNumberImg(nstr,nmaps):
     pImDraw = ImageDraw.Draw(pIm)
 
     for ci,char in enumerate(nstr):
-        offx,offy,cx,cy = list(pImDraw.textbbox((0,0),char,IEBC_FONT,spacing=padding))
-        chrSizes.append([cx,cy,offx,offy])
-    tsize = (sum([sz[0]-sz[2] for sz in chrSizes]),max([sz[1]-sz[3] for sz in chrSizes]))
+        offx,offy,cx,cy = list(pImDraw.textbbox((0,0),char,IEBC_FONT))
+        chrSizes.append([cx+ek,cy+ek,offx,offy])
+    tsize = (sum([sz[0]-sz[2]+padding for sz in chrSizes]),max([sz[1]-sz[3] for sz in chrSizes]))
     org = [isize[1]//2-tsize[0]//2,isize[0]//2-tsize[1]//2]
     if len(nstr) > 10:
         org[0] = isize[1]-tsize[0]
@@ -37,12 +39,12 @@ def createNumberImg(nstr,nmaps):
 
     chrLocs = []
     for ci,char in enumerate(nstr):
-        bound = [org[0]+sum([sz[0]-sz[2] for sz in chrSizes[:ci]])+chrSizes[ci][0]//2,
-                 org[1]+(chrSizes[ci][1] - chrSizes[ci][3])//2,(chrSizes[ci][0]-chrSizes[ci][2])*1.5,
-                 (chrSizes[ci][1]-chrSizes[ci][3])*1.5]
+        chr_x,chr_y = org[0]+sum([sz[0]-sz[2]+padding for sz in chrSizes[:ci]]),org[1]-chrSizes[ci][3],
+        chr_w,chr_h = (chrSizes[ci][0]-chrSizes[ci][2]),(chrSizes[ci][1]-chrSizes[ci][3])
+
+        bound = [chr_x+chrSizes[ci][0]//2,chr_y+chrSizes[ci][3]+chr_h//2,chr_w*1.5,chr_h*1.5]
         bounds.append([int(char),[d/im.shape[(di+1)%2] for di,d in enumerate(bound)]])
-        pImDraw.text(tuple([org[0]+sum([sz[0]-sz[2] for sz in chrSizes[:ci]]),org[1]-chrSizes[ci][3]]),
-                     char,black,IEBC_FONT)
+        pImDraw.text((chr_x,chr_y),char,black,IEBC_FONT)
         chrLocs.append([org[0]+sum([sz[0]-sz[2] for sz in chrSizes[:ci]]),org[1],
                         (chrSizes[ci][0] - chrSizes[ci][2]),
                         (chrSizes[ci][1] - chrSizes[ci][3])])
@@ -52,18 +54,14 @@ def createNumberImg(nstr,nmaps):
     fIm = np.array(pIm)
 
     #bumpy characters
-    dil = cv2.dilate(fIm, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)))
-    outline = np.logical_and((dil == white), (fIm != white))
-    olNoise = cv2.GaussianBlur(np.random.normal(0,0.1,fIm.shape),(3,3),0)
-    nOutline = np.logical_and(outline,(olNoise > 0))
-    fIm = dil*np.logical_not(nOutline)+nOutline*fIm
+    fIm = cv2.erode(fIm,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(ek,ek)))
 
     #add noise to each character
     for x,y,w,h in chrLocs:
         chrNoiseRaw = utilityFunctions.pickNoiseMap(nmaps)
         nx,ny = random.randint(0,chrNoiseRaw.shape[1]-w),random.randint(0,chrNoiseRaw.shape[0]-h)
         chrNoise = chrNoiseRaw[ny:ny+h,nx:nx+w]
-        chrNoise = (chrNoise - np.min(chrNoise)) * (100/(np.max(chrNoise)-np.min(chrNoise)))
+        chrNoise = (chrNoise - np.min(chrNoise)) * (220/(np.max(chrNoise)-np.min(chrNoise)))
         fIm[y:y+h,x:x+w] = np.max([chrNoise,fIm[y:y+h,x:x+w]],axis=0)
     return fIm,fBounds
 
